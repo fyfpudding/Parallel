@@ -1,0 +1,99 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <omp.h>
+
+#define MAX_LINE_LENGTH 1024
+#define QUEUE_SIZE 100
+
+// Queue implementation (using a circular array)
+char queue[QUEUE_SIZE][MAX_LINE_LENGTH];
+int head = 0, tail = 0;
+
+omp_lock_t queue_lock;
+
+void enqueue(char *line) {
+    omp_set_lock(&queue_lock);
+    if ((tail + 1) % QUEUE_SIZE != head) {
+        strcpy(queue[tail], line);
+        tail = (tail + 1) % QUEUE_SIZE;
+    } else {
+        printf("Queue full!\n");
+    }
+    omp_unset_lock(&queue_lock);
+}
+
+char *dequeue() {
+    omp_set_lock(&queue_lock);
+    if (head != tail) {
+        char *line = queue[head];
+        head = (head + 1) % QUEUE_SIZE;
+        omp_unset_lock(&queue_lock);
+        return line;
+    } else {
+        omp_unset_lock(&queue_lock);
+        return NULL;
+    }
+}
+
+void producer(char *filename) {
+    FILE *fp = fopen(filename, "r");
+    if (fp == NULL) {
+        perror("fopen");
+        exit(1);
+    }
+
+    char line[MAX_LINE_LENGTH];
+    while (fgets(line, MAX_LINE_LENGTH, fp) != NULL) {
+        enqueue(line);
+    }
+
+    fclose(fp);
+}
+
+void consumer() {
+    char *line;
+    while ((line = dequeue()) != NULL) {
+        char *token = strtok(line, " \t\n");
+        while (token != NULL) {
+            printf("%s\n", token);
+            token = strtok(NULL, " \t\n");
+        }
+    }
+}
+
+int main() {
+    omp_init_lock(&queue_lock);
+
+    // Get input file name (outside timed region)
+    char filename[MAX_LINE_LENGTH];
+    printf("Enter input file name: ");
+    scanf("%s", filename);
+
+    // Start timing for computation
+    double start_time = omp_get_wtime();
+
+    #pragma omp parallel sections
+    {
+        #pragma omp section
+        {
+            producer(filename);
+        }
+
+        #pragma omp section
+        {
+            #pragma omp parallel for
+            for (int i = 0; i < omp_get_num_threads(); i++) {
+                consumer();
+            }
+        }
+    }
+
+    // Stop timing and print computation time
+    double end_time = omp_get_wtime();
+    printf("Computation time: %f seconds\n", end_time - start_time);
+
+    omp_destroy_lock(&queue_lock);
+
+    return 0;
+}
